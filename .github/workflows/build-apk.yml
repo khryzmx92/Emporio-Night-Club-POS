@@ -1,0 +1,58 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Emporio_Night_Club_POS_V3.1_GitHub.zip'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Java y Node
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Descomprimir proyecto
+        run: |
+          mkdir project
+          unzip -q Emporio_Night_Club_POS_V3.1_GitHub.zip -d project
+          test -f project/index.html
+          test -f project/.github/app.json
+
+      - name: Descargar constructor Web2APK
+        run: |
+          git clone https://github.com/bhawan-kavinda/Web2APK.git "$RUNNER_TEMP/Web2APK"
+          cd "$RUNNER_TEMP/Web2APK"
+          git fetch --tags
+          TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
+          if [ -n "$TAG" ]; then git checkout "$TAG"; fi
+
+      - name: Generar APK
+        env:
+          WEB_DIR: ${{ github.workspace }}/project
+          CONFIG_DIR: ${{ github.workspace }}/project/.github
+          OUT_DIR: ${{ github.workspace }}/output
+        run: |
+          node "$RUNNER_TEMP/Web2APK/scripts/build.mjs"
+
+      - name: Guardar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Emporio-Night-Club-POS-APK
+          path: output/*.apk
+          if-no-files-found: error

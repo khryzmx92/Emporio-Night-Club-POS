@@ -1,132 +1,69 @@
 name: Build APK
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main, master]
+    paths:
+      - 'Emporio_POS_CATEGORIAS_CORREGIDAS_v3_2.zip'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: emporio-apk-${{ github.ref }}
-  cancel-in-progress: false
+env:
+  WEB2APK_REPO: bhawan-kavinda/Web2APK
 
 jobs:
   build:
     name: Build Emporio APK
     runs-on: ubuntu-latest
-
     steps:
-      - name: Descargar repositorio
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Preparar Java
+      - name: Extract Emporio source
+        run: |
+          test -f Emporio_POS_CATEGORIAS_CORREGIDAS_v3_2.zip
+          unzip -o Emporio_POS_CATEGORIAS_CORREGIDAS_v3_2.zip -d "$GITHUB_WORKSPACE"
+          test -f index.html
+          test -f assets/icon-192.png
+          test -f .github/icon.png
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Preparar Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Verificar ZIP y versión
-        id: meta
-        shell: bash
+      - name: Get Web2APK release
         run: |
-          set -euo pipefail
+          REPO_URL="https://github.com/$WEB2APK_REPO.git"
+          REF=$(git ls-remote --tags --refs --sort=-v:refname "$REPO_URL" 'v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+          test -n "$REF"
+          git clone --depth 1 --branch "$REF" "$REPO_URL" "$RUNNER_TEMP/Web2APK"
+          echo "W2A_DIR=$RUNNER_TEMP/Web2APK" >> "$GITHUB_ENV"
 
-          ZIP="Emporio_POS_CATEGORIAS_CORREGIDAS_v3_2.zip"
-
-          if [ ! -f "$ZIP" ]; then
-            echo "::error::No existe el ZIP esperado en la raíz de main."
-            exit 1
-          fi
-
-          echo "Commit compilado: $GITHUB_SHA"
-          echo "Archivo de entrada:"
-          ls -lh "$ZIP"
-          sha256sum "$ZIP"
-          unzip -t "$ZIP"
-
-          mkdir -p project
-          unzip -o "$ZIP" -d project
-
-          test -s project/index.html || {
-            echo "::error::Falta project/index.html"
-            exit 1
-          }
-
-          test -s project/.github/app.json || {
-            echo "::error::Falta project/.github/app.json"
-            exit 1
-          }
-
-          node -e "
-            const c = require('./project/.github/app.json');
-            console.log('Configuración app.json:');
-            console.log(JSON.stringify(c, null, 2));
-            console.log('Versión:', c.versionName || c.version || 'sin versión');
-            console.log('Código:', c.versionCode || 'sin código');
-          "
-
-          echo "Comprobación del contenido de index.html:"
-          grep -n -m 3 'function setCustomer' project/index.html || true
-          grep -niE 'pago dividido|dividir pago|split payment' \
-            project/index.html || true
-
-      - name: Descargar constructor Web2APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git clone \
-            https://github.com/bhawan-kavinda/Web2APK.git \
-            "$RUNNER_TEMP/Web2APK"
-
-          cd "$RUNNER_TEMP/Web2APK"
-          git fetch --tags
-
-          TAG="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' \
-            --sort=-version:refname | head -n 1)"
-
-          if [ -n "$TAG" ]; then
-            echo "Versión del constructor: $TAG"
-            git checkout "$TAG"
-          else
-            echo "No se encontró una etiqueta; se usará la rama predeterminada."
-          fi
-
-      - name: Generar APK
+      - name: Build Emporio APK
         env:
-          WEB_DIR: ${{ github.workspace }}/project
-          CONFIG_DIR: ${{ github.workspace }}/project/.github
+          WEB_DIR: ${{ github.workspace }}
+          CONFIG_DIR: ${{ github.workspace }}/.github
           OUT_DIR: ${{ github.workspace }}/output
-        run: |
-          set -euo pipefail
-          node "$RUNNER_TEMP/Web2APK/scripts/build.mjs"
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: node "$W2A_DIR/scripts/build.mjs"
 
-      - name: Verificar APK generado
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! find output -maxdepth 1 -type f \
-            -name '*.apk' -print -quit | grep -q .; then
-            echo "::error::No se generó ningún APK."
-            exit 1
-          fi
-
-          ls -lh output/*.apk
-          sha256sum output/*.apk
-
-      - name: Guardar APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Emporio-Night-Club-POS-${{ github.run_number }}
+          name: Emporio-Night-Club-POS-cierre-0600
           path: output/*.apk
           if-no-files-found: error
-          retention-days: 14
+          
